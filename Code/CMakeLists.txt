@@ -12,7 +12,7 @@ cmake_minimum_required(VERSION 2.8.9)
 project(BluetoothLECommunicator)
 
 set(BINARY_NAME "bluecomm")
-set(REPOS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set(REPOS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
 # Include compiler options.
 include(${REPOS_ROOT}/Commun/CMake/CompilerOptions.cmake)
