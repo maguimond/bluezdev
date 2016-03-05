@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Get address from bluecomm app
-BLE_ADDR=$(bluecomm | grep "BlueMon" | awk '{print $1;exit;}')
+#echo "Scan des devies bluetooth"
+#BLE_ADDR=$(hcitool lescan | grep BlueTemp | awk '{print $1}')
+BLE_ADDR='C5:2A:45:36:E3:A2'
 
 # GET_CONFIG test:
 # <CONFIG><GET><CHECKSUM>
@@ -14,9 +16,7 @@ if [ "$BLE_ADDR" ]
         # Enable notification and indication flags
         gatttool -b $BLE_ADDR --char-write-req -a 0x0011 -n 0300
         # Send data packet through the BlueMon Request characteristic
-        gatttool -b $BLE_ADDR --char-write-req -a 0x000E -n A03C23
-        # Listen to the BlueMon Reply characteristic
-        gatttool -b $BLE_ADDR --char-read --handle=0x0010 --listen
+        gatttool -b $BLE_ADDR --char-write-req -a 0x000E -n A03C23 --listen
 else
     echo "Cannot get BLE address."
 fi
