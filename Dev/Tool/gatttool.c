@@ -67,6 +67,7 @@
 
 static char *opt_src = NULL;
 static char *opt_dst = NULL;
+static char *opt_dst_name = NULL;
 static char *opt_value = NULL;
 static char *opt_sec_level = NULL;
 static bt_uuid_t *opt_uuid = NULL;
@@ -194,8 +195,7 @@ static void connect_cb(GIOChannel *io, GError *err, gpointer user_data)
 	int quitSignal =0;
 		
 		//GAttrib *attrib;
-		
-	printf("connect cb: opt_dst= %s\n",opt_dst);
+
 
 
 	if (err) {
@@ -254,6 +254,7 @@ static void connect_cb(GIOChannel *io, GError *err, gpointer user_data)
 				break;
 			default:
 				printf("Bad command\n");
+						g_main_loop_quit(event_loop);
 				break;
 		}
 	//}
@@ -398,6 +399,13 @@ static int print_advertising_devices(int dd, uint8_t filter_type)
 							name, sizeof(name) - 1);
 
 			printf("%s %s\n", addr, name);
+			if(strcmp(name,opt_dst_name)==0)
+			{
+				printf("Found %s! MAC Addr: %s\n", name, addr);
+				opt_dst = (char *)malloc(18);
+				strcpy(opt_dst,addr);
+				goto done;
+			}
 		}
 	}
 
@@ -412,7 +420,16 @@ done:
 
 int main(int argc, char *argv[])
 {
-/*
+
+	GIOChannel *chan;
+
+
+
+
+
+if(strcmp(argv[1],"-n") == 0)
+{
+	
 int dev_id =-1;
 	int err, opt, dd;
 	uint8_t own_type = 0x00;
@@ -422,8 +439,11 @@ int dev_id =-1;
 	uint16_t window = htobs(0x0010);
 	uint8_t filter_dup = 1;
 
+	opt_dst_name = (char *)malloc(strlen(argv[2])+1);
+	strcpy(opt_dst_name,argv[2]);
 	
 	// Identifying by name... to get MAC adress (see tools/hcitool.c)
+		printf("Searching for device named: %s\n",opt_dst_name);
 	
 		dev_id = hci_get_route(NULL);
 
@@ -432,19 +452,27 @@ int dev_id =-1;
 		err = hci_le_set_scan_enable(dd, 0x01, filter_dup, 1000);
 		err = print_advertising_devices(dd, filter_type);
 		err = hci_le_set_scan_enable(dd, 0x00, filter_dup, 1000);
-	*/
-	GIOChannel *chan;
+		hci_close_dev(dd);
+}
 
 
-
+	else if(strcmp(argv[1],"-b") == 0)
+	{
+		opt_dst = (char *)malloc(18);
+	strcpy(opt_dst,argv[2]);
 		
+	}
+	else
+	{
+		printf("Bad option...\n");
+		return 0;
+	}
+	
+	
+	
+	
 	opt_sec_level = (char *)malloc(4);
 	strcpy(opt_sec_level,"low");
-
-	opt_dst = (char *)malloc(18);
-	strcpy(opt_dst,argv[2]);
-	
-	printf("opt_dst: %s\n",opt_dst);
 
 	if (opt_interactive) {
 		interactive(opt_src, opt_dst, opt_psm);
