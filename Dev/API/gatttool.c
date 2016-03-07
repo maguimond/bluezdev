@@ -1,7 +1,19 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
-
+/*
+// Daemon Includes - Tests purposes
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <stdio.h>
+//#include <stdlib.h>
+#include <fcntl.h>
+//#include <errno.h>
+//#include <unistd.h>
+//#include <syslog.h>
+#include <string.h>
+#define DAEMON_NAME "vdaemon"
+*/
 #include <errno.h>
 #include <glib.h>
 #include <glib/gprintf.h>
@@ -19,86 +31,64 @@
 #include "gatt.h"
 #include "gatttool.h"
 
+#define FLAGS_LIMITED_MODE_BIT 		0x01
+#define FLAGS_GENERAL_MODE_BIT 		0x02
+#define EIR_NAME_SHORT              0x08 
+#define EIR_NAME_COMPLETE           0x09
 
-#define FLAGS_LIMITED_MODE_BIT 0x01
-#define FLAGS_GENERAL_MODE_BIT 0x02
-#define EIR_NAME_SHORT              0x08  /* shortened local name */
-#define EIR_NAME_COMPLETE           0x09  /* complete local name */
+typedef void (*connect_cb)(gpointer user_data, GError *err);
+typedef void (*write_cb)(gpointer user_data, guint8 errCode);
+typedef void (*listen_cb)(gpointer user_data, int errorCode);
+typedef void (*read_cb)(gpointer user_data, uint8_t *value,int vlen, guint8 errCode);
 
-/*				
-//''Higher level'' (Are caused by lower level error(s)):
-#define ECONNECTFAILED			1					
-#define EDISCONNECTFAILED		2					
-#define EAPPENDCHECKSUMFAILED	3					
-#define EWRITEFAILED			4					
-#define EREADFAILED				5		
+typedef struct listenSessionDataStruct{
+	FILE *userFilePtr;
+	GAttrib *attrib;
+	listen_cb userListenCb;
+	int notifyEvtId;
+	int indEvtId;
+}listenSessionData;
 
-//''Lower level'':
-#define ENODEV				1					
-#define ENOSERVER			2					
-#define ENACKRECEIVED		3					
-#define ECHECKSUMMISMATCH	4					
-#define EBUFFEROVERFLOW		5		
-*/
-/*
-	const unsigned char *primaryErrorStrMsg[6] = {	"No errors",
-													"Connection Failed",
-													"Disconection Failed",
-													"AppendChecksum Failed",
-													"Write Failed",
-													"Read Failed"};
-												
-	const unsigned char *secondaryErrorStrMsg[6] = {	"No errors",
-														"No local bluetooth device as been found",
-														"The specified server is not reachable",
-														"Received a NACK from the server",
-														"The localy computed checksum is different than the one in the data received",
-														"Buffer Overflow"};
-														
-	typedef struct errorStatusStruct{
-		int primaryErrorCode = 0;
-		int secondaryErrorCode = 0;
-	}errorStatus;
-	*/
-	
-	
+typedef struct writeDataStruct{
+	GAttrib *attrib;
+	write_cb userWriteCb;
+}writeData;
 
-	typedef void (*connect_cb)(gpointer user_data, int errorCode);
-	typedef void (*write_cb)(int errorCode);
-	typedef void (*listen_cb)(int errorCode);
-	typedef void (*read_cb)(uint8_t *value,int vlen, int errorCode);
-	
-	static connect_cb userConCb;
-	static write_cb userWriteCb;
-	static listen_cb userListenCb;
-	static read_cb userReadCb;
-	
-	static FILE *userFilePtr = NULL;
-	
+typedef struct readDataStruct{
+	GAttrib *attrib;
+	read_cb userReadCb;
+}readData;
+
+static connect_cb userConCb;
 	
 // "Private Functions"
 
+//TODO
 //int getChecksum(char *data);
 
 void connectCallbackWrapper(GIOChannel *io, GError *err, gpointer user_data)
 {
 	printf("API Connection Callback Wrapper\n");
 	
-	GAttrib *attrib;
+	GAttrib *attrib=NULL;
 
-	if (err) {
+	if (err) 
+	{
 		g_printerr("%s\n", err->message);
-			//got_error = TRUE;
-			//g_main_loop_quit(event_loop);
+	}
+	else
+	{
+		attrib = g_attrib_new(io);
 	}
 
-	attrib = g_attrib_new(io);
-	userConCb(attrib,0);
-	
+	userConCb(attrib,err);
 }
 
 void writeCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpointer user_data)
 {
+	writeData *wdata = (listenSessionData *) user_data;
+	GAttrib *attrib = wdata->attrib;
+		
 	g_print("API Write Callback wrapper\n");
 	
 	if (status != 0) {
@@ -107,14 +97,20 @@ void writeCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpoint
 	}
 	else if (!dec_write_resp(pdu, plen)) {
 		g_printerr("Protocol error\n");
+		//TODO: Fix this so bad patch...
+		status = 100;
 	}
 
-	userWriteCb(0);
+	free(user_data);
+	wdata->userWriteCb(attrib,status);
 }
 
 void readCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpointer user_data)
 {
-		g_print("API Read Callback wrapper\n");
+	readData *rdata = (listenSessionData *) user_data;
+	GAttrib *attrib = rdata->attrib;
+		
+	g_print("API Read Callback wrapper\n");
 		
 	uint8_t value[ATT_MAX_MTU];
 	int i, vlen;
@@ -122,17 +118,16 @@ void readCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpointe
 	if (status != 0) {
 		g_printerr("Characteristic value/descriptor read failed: %s\n",
 							att_ecode2str(status));
-		//goto done;
 	}
 	if (!dec_read_resp(pdu, plen, value, &vlen)) {
 		g_printerr("Protocol error\n");
-		//goto done;
+		//TODO: Fix this so bad patch...
+		status = 100;
 	}
-	//g_print("Characteristic value/descriptor: ");
-	//for (i = 0; i < vlen; i++)
-		//g_print("%02x ", value[i]);
-	//g_print("\n");
-	userReadCb(value,vlen,0);
+	
+		free(user_data);
+	rdata->userReadCb(attrib,value,vlen,status);
+
 
 }
 
@@ -166,24 +161,25 @@ int connect_by_addr(char *server_mac_addr, connect_cb cbFct)
 	return 0;
 }
 
+//A lot of functions to discover by name....
 static int check_report_filter(uint8_t procedure, le_advertising_info *info)
 {
 	uint8_t flags;
 
-	/* If no discovery procedure is set, all reports are treat as valid */
+	// If no discovery procedure is set, all reports are treat as valid 
 	if (procedure == 0)
 		return 1;
 
-	/* Read flags AD type value from the advertising report if it exists */
+	// Read flags AD type value from the advertising report if it exists 
 	if (read_flags(&flags, info->data, info->length))
 		return 0;
 
 	switch (procedure) {
-	case 'l': /* Limited Discovery Procedure */
+	case 'l': // Limited Discovery Procedure 
 		if (flags & FLAGS_LIMITED_MODE_BIT)
 			return 1;
 		break;
-	case 'g': /* General Discovery Procedure */
+	case 'g': // General Discovery Procedure 
 		if (flags & (FLAGS_LIMITED_MODE_BIT | FLAGS_GENERAL_MODE_BIT))
 			return 1;
 		break;
@@ -204,7 +200,7 @@ static void eir_parse_name(uint8_t *eir, size_t eir_len,
 		uint8_t field_len = eir[0];
 		size_t name_len;
 
-		/* Check for the end of EIR */
+		// Check for the end of EIR 
 		if (field_len == 0)
 			break;
 
@@ -278,7 +274,7 @@ static int print_advertising_devices(int dd, uint8_t filter_type, gchar *opt_dst
 		if (meta->subevent != 0x02)
 			goto done;
 
-		/* Ignoring multiple reports */
+		// Ignoring multiple reports 
 		info = (le_advertising_info *) (meta->data + 1);
 		if (check_report_filter(filter_type, info)) {
 			char name[30];
@@ -309,7 +305,6 @@ done:
 	return 0;
 }
 
-//Return 0 if ok, else return primaryErrorCode
 int connect_by_name(char *server_name, connect_cb cbFct)
 {
 	gchar *opt_dst = NULL;
@@ -328,28 +323,28 @@ int connect_by_name(char *server_name, connect_cb cbFct)
 	opt_dst_name = (char *)malloc(strlen(server_name)+1);
 	strcpy(opt_dst_name,server_name);
 	
-	// Identifying by name... to get MAC adress (see tools/hcitool.c)
-		printf("Searching for device named: %s\n",opt_dst_name);
+	printf("Searching for device named: %s\n",opt_dst_name);
+
+	dev_id = hci_get_route(NULL);
+
+	dd = hci_open_dev(dev_id);
+	err = hci_le_set_scan_parameters(dd, scan_type, interval, window, own_type, 0x00, 1000);
+	err = hci_le_set_scan_enable(dd, 0x01, filter_dup, 1000);
+	err = print_advertising_devices(dd, filter_type,opt_dst_name,opt_dst);
+	err = hci_le_set_scan_enable(dd, 0x00, filter_dup, 1000);
+	hci_close_dev(dd);
+
 	
-		dev_id = hci_get_route(NULL);
-
-		dd = hci_open_dev(dev_id);
-		err = hci_le_set_scan_parameters(dd, scan_type, interval, window, own_type, 0x00, 1000);
-		err = hci_le_set_scan_enable(dd, 0x01, filter_dup, 1000);
-		err = print_advertising_devices(dd, filter_type,opt_dst_name,opt_dst);
-		err = hci_le_set_scan_enable(dd, 0x00, filter_dup, 1000);
-		hci_close_dev(dd);
-
-		
-		connect_by_addr(opt_dst, cbFct);
-		
-		free(opt_dst_name);
-		free(opt_dst);
+	connect_by_addr(opt_dst, cbFct);
+	
+	free(opt_dst_name);
+	free(opt_dst);
+	
+	return 0;
 }
 
 //Write automatically append the checksum (TODO: If needed?)
 //Return 0 if ok, else return primaryErrorCode
-
 int writeSingle(gpointer user_data, int hnd,char *data, write_cb cbFct)
 {
 	GAttrib *attrib = user_data;
@@ -357,7 +352,9 @@ int writeSingle(gpointer user_data, int hnd,char *data, write_cb cbFct)
 	printf("API Write Single\n");
 		
 	//Set user callback function
-	userWriteCb = cbFct;
+	writeData *wdata = malloc(sizeof *wdata);
+	wdata->userWriteCb = cbFct;
+	wdata->attrib = attrib;
 	
 	//Parse attribute data and get lengeh
 	uint8_t *value;
@@ -365,38 +362,49 @@ int writeSingle(gpointer user_data, int hnd,char *data, write_cb cbFct)
 	len = gatt_attr_data_from_string(data, &value);
 	
 	//Write --> ... --> writeCallBackWrapper
-	gatt_write_char(attrib, hnd, value, len, writeCallBackWrapper, NULL);
+	gatt_write_char(attrib, hnd, value, len, writeCallBackWrapper, wdata);
+	
+	return 0;
 }
 
+//TODO
 //int writeBatch(GIOChannel *io, int *hnd,char **data, cb_fct cbFct); //Return 0 if ok, else return primaryErrorCode
 
 int readSingle(gpointer user_data, int hnd,read_cb cbFct)
 {
-		GAttrib *attrib = user_data;
-			printf("API Read Single\n");
-			
-			userReadCb = cbFct;
-			
-		gatt_read_char(attrib, hnd, 0, readCallBackWrapper, attrib);
+	GAttrib *attrib = user_data;
+	printf("API Read Single\n");
+
+	readData *rdata = malloc(sizeof *rdata);
+	rdata->userReadCb = cbFct;
+	rdata->attrib = attrib;
+
+	gatt_read_char(attrib, hnd, 0, readCallBackWrapper, rdata);
+	
+	return 0;
 }
+
+//TODO
 //char* readBatch(GIOChannel *io, int *hnd,char **data,read_cb cbFct);
 
+//TODO
 //void printErrors(FILE *fp); // Allow to redirect to sdtout or a file(eg: errorsLog)
 
 static void events_handler(const uint8_t *pdu, uint16_t len, gpointer user_data)
 {
-	GAttrib *attrib = user_data;
+	listenSessionData *data = (listenSessionData *)user_data;
+	GAttrib *attrib = data->attrib;
 	FILE *fp;
-	if(userFilePtr != NULL)
+	if(data->userFilePtr != NULL)
 	{
-		fp = userFilePtr;
+		fp = data->userFilePtr;
 	}
 	else
 	{
 		fp = stdout;
 	}
 		
-	printf("API Event Handler\n");
+	printf("API Listen Event Handler\n");
 	uint8_t opdu[ATT_MAX_MTU];
 	uint16_t handle, i, olen = 0;
 
@@ -431,114 +439,275 @@ static void events_handler(const uint8_t *pdu, uint16_t len, gpointer user_data)
 static gboolean listen_stop(gpointer user_data)
 {	
 	printf("API Listen stop\n");
-	GAttrib *attrib = user_data;
-	g_attrib_unregister_all(attrib);
+	listenSessionData *data = (listenSessionData *)user_data;
+	GAttrib *attrib = data->attrib;
+
+	g_attrib_unregister(attrib,data->notifyEvtId);
+	g_attrib_unregister(attrib,data->indEvtId);
 	
 	return FALSE;
 }
 
 static void listen_destroy(gpointer user_data)
 {
+	listenSessionData *data = (listenSessionData *) user_data;
+	GAttrib *attrib = data->attrib;
+		
 	printf("API Listen destroy\n");
-	userListenCb(0);
+	
+	if(data->userFilePtr != NULL)
+	{
+		fclose(data->userFilePtr);
+	}
+	
+	free(user_data);
+	
+	data->userListenCb(attrib,0);
 }
 
 static void listen_start(gpointer user_data, unsigned int timeout, listen_cb cbFct, FILE *fp)
 {
 	GAttrib *attrib = user_data;
 	
-	userListenCb = cbFct;
-	
-	if(fp != NULL)
-	{
-		userFilePtr = fp;
-	}
-	else
-	{
-		userFilePtr = NULL;
-	}
+	listenSessionData *data = malloc(sizeof *data);
+	data->attrib = user_data;
+	data->userListenCb = cbFct;
+	data->userFilePtr = fp;
 		
 	printf("API Listen start\n");
-	g_attrib_register(attrib, ATT_OP_HANDLE_NOTIFY, events_handler,
-							attrib, NULL);
-	g_attrib_register(attrib, ATT_OP_HANDLE_IND, events_handler,
-							attrib, NULL);
+	
+	data->notifyEvtId = g_attrib_register(attrib, ATT_OP_HANDLE_NOTIFY, events_handler, data, NULL);
+	data->indEvtId = g_attrib_register(attrib, ATT_OP_HANDLE_IND, events_handler, data, NULL);
 							
 	if(timeout)
 	{
-		g_timeout_add_full (G_PRIORITY_DEFAULT,timeout, listen_stop, attrib, listen_destroy);
+		g_timeout_add_full (G_PRIORITY_DEFAULT,timeout, listen_stop, data, listen_destroy);
 	}
 }
 
 
 
+// SIMPLE EXAMPLE USER CODE - TOOL STYLE
 
-// SIMPLE EXAMPLE USER CODE
+static GMainLoop *my_event_loop;
+static int testCnt = 0;
+
+void my_read_cb(gpointer user_data, uint8_t *value,int vlen, int errorCode)
+{
+	GAttrib *my_attrib = user_data;
+		
+	int i;
+	printf("User Read Callback\n");
+	g_print("Read Data: ");
+	for (i = 0; i < vlen; i++)
+	{
+		g_print("%02x ", value[i]);
+	}
+	g_print("\n");
+			
+	printf("Sleeping for 5 seconds...\n");
+	sleep(5);
+	printf("Exiting\n");
+	g_main_loop_quit(my_event_loop);
+}
+
+void my_stdout_listen_cb(gpointer user_data, int errorCode)
+{
+	GAttrib *my_attrib = user_data;
+		
+	printf("User Console Listen Callback\n");
+
+}
+void my_file_listen_cb(gpointer user_data, int errorCode)
+{
+	GAttrib *my_attrib = user_data;
+		
+	printf("User File Listen Callback\n");
+
+	readSingle(my_attrib,0x0010,my_read_cb);
+}
+
+void my_write_cb(gpointer user_data, int errorCode)
+{
+	GAttrib *my_attrib = user_data;
+	
+	FILE* fp = fopen("/root/data_dump.log","w");
+	
+	printf("User Write Callback\n");
+	if(testCnt == 0)
+	{
+		writeSingle(my_attrib,0x000E,"A13C22",my_write_cb);
+		testCnt = 1;
+	}
+	else
+	{
+		listen_start(my_attrib, 5000,my_stdout_listen_cb,NULL); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
+		sleep(1);
+		listen_start(my_attrib, 10000,my_file_listen_cb,fp); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
+	}
+}
+void my_con_cb(gpointer user_data, int errorCode)
+{
+	GAttrib *my_attrib = user_data;
+	
+	printf("User Connection Callback\n");
+	my_attrib = user_data;
+	writeSingle(my_attrib,0x0011,"0300",my_write_cb);
+}
+
+int main(int argc, char *argv[])
+{
+	printf("User Main , Compile @ 3:11pm\n");
+	
+	if(strcmp(argv[1],"-b") == 0)
+	{
+		connect_by_addr(argv[2], my_con_cb);		
+	}
+	else if(strcmp(argv[1],"-n") == 0)
+	{
+		connect_by_name(argv[2], my_con_cb);
+	}
+	
+	my_event_loop = g_main_loop_new(NULL, FALSE);
+	g_main_loop_run(my_event_loop);
+	g_main_loop_unref(my_event_loop);
+	exit(EXIT_SUCCESS);
+}
+
+
+
+
+
+
+// DEAD CODE
+/*
+// SIMPLE EXAMPLE USER CODE - DAEMON STYLE
+
 static GMainLoop *my_event_loop;
 static GAttrib *my_attrib;
 
 static int testCnt = 0;
 
-	void my_read_cb(uint8_t *value,int vlen, int errorCode)
+void my_read_cb(uint8_t *value,int vlen, int errorCode)
+{
+	int i;
+	printf("User Read Callback\n");
+	g_print("Read Data: ");
+	for (i = 0; i < vlen; i++)
 	{
-			int i;
-				printf("User Read Callback\n");
-			g_print("Characteristic value/descriptor: ");
-				for (i = 0; i < vlen; i++)
-				{
-					g_print("%02x ", value[i]);
-				}
-				g_print("\n");
-				
-						printf("Sleeping for 10 seconds...\n");
-		sleep(10);
-		printf("See you soon!\n");
-		g_main_loop_quit(my_event_loop);
+		g_print("%02x ", value[i]);
 	}
-	
-	void my_listen_cb(int errorCode)
-	{
-		printf("User Listen Callback\n");
-		readSingle(my_attrib,0x0010,my_read_cb);
-		//printf("Sleeping for 10 seconds...\n");
-		//sleep(10);
-		//printf("See you soon!\n");
-		//g_main_loop_quit(my_event_loop);
-	}
+	g_print("\n");
+			
+	printf("Sleeping for 5 seconds...\n");
+	sleep(5);
+	printf("See you soon!\n");
+	g_main_loop_quit(my_event_loop);
+}
 
-	void my_write_cb(int errorCode)
+void my_listen_cb(int errorCode)
+{
+	printf("User Listen Callback\n");
+	fclose(my_fp);
+	my_fp = NULL;
+	readSingle(my_attrib,0x0010,my_read_cb);
+	//printf("Sleeping for 10 seconds...\n");
+	//sleep(10);
+	//printf("See you soon!\n");
+	//g_main_loop_quit(my_event_loop);
+}
+
+void my_write_cb(int errorCode)
+{
+
+	my_fp = fopen("/root/data_dump.log","w");
+	
+	printf("User Write Callback\n");
+	if(testCnt == 0)
 	{
-		printf("User Write Callback\n");
-		if(testCnt == 0)
-		{
-			writeSingle(my_attrib,0x000E,"A13C22",my_write_cb);
-			testCnt = 1;
-		}
-		else
-		{
-			listen_start(my_attrib, 5000,my_listen_cb,stdout); // Can pass stdout or any other file ptr, if NULL API will use stdout, 0 as timeout=runs forever
-		}
+		writeSingle(my_attrib,0x000E,"A13C22",my_write_cb);
+		testCnt = 1;
 	}
-	void my_con_cb(gpointer user_data, int errorCode)
+	else
 	{
-		printf("User Connection Callback\n");
-		my_attrib = user_data;
-		writeSingle(my_attrib,0x0011,"0300",my_write_cb);
+		//listen_start(my_attrib, 5000,my_listen_cb,stdout); // Can pass stdout or any other file ptr, if NULL API will use stdout, 0 as timeout=runs forever
+		listen_start(my_attrib, 5000,my_listen_cb,my_fp); // Can pass stdout or any other file ptr, if NULL API will use stdout, 0 as timeout=runs forever
 	}
+}
+void my_con_cb(gpointer user_data, int errorCode)
+{
+	printf("User Connection Callback\n");
+	my_attrib = user_data;
+	writeSingle(my_attrib,0x0011,"0300",my_write_cb);
+}
 
 int main(int argc, char *argv[])
 {
-			printf("User Main\n");
-			if(strcmp(argv[1],"-b") == 0)
-			{
-				connect_by_addr(argv[2], my_con_cb);		
-			}
-			else if(strcmp(argv[1],"-n") == 0)
-			{
-				connect_by_name(argv[2], my_con_cb);
-			}
-				my_event_loop = g_main_loop_new(NULL, FALSE);
-			g_main_loop_run(my_event_loop);
-			g_main_loop_unref(my_event_loop);
+	printf("User Main\n");
+	
+	if(strcmp(argv[1],"-b") == 0)
+	{
+		connect_by_addr(argv[2], my_con_cb);		
+	}
+	else if(strcmp(argv[1],"-n") == 0)
+	{
+		connect_by_name(argv[2], my_con_cb);
+	}
+	
+	my_event_loop = g_main_loop_new(NULL, FALSE);
+	g_main_loop_run(my_event_loop);
+	g_main_loop_unref(my_event_loop);
 	exit(EXIT_SUCCESS);
 }
+
+void process(){
+	//TODO: Look into input file to know if any write is waiting
+    //syslog (LOG_NOTICE, "Writing to my Syslog");
+}   
+
+int main(int argc, char *argv[]) {
+
+    //Set our Logging Mask and open the Log
+    setlogmask(LOG_UPTO(LOG_NOTICE));
+    openlog(DAEMON_NAME, LOG_CONS | LOG_NDELAY | LOG_PERROR | LOG_PID, LOG_USER);
+
+    syslog(LOG_INFO, "Entering Daemon");
+
+    pid_t pid, sid;
+
+   //Fork the Parent Process
+    pid = fork();
+
+    if (pid < 0) { exit(EXIT_FAILURE); }
+
+    //We got a good pid, Close the Parent Process
+    if (pid > 0) { exit(EXIT_SUCCESS); }
+
+    //Change File Mask
+    umask(0);
+
+    //Create a new Signature Id for our child
+    sid = setsid();
+    if (sid < 0) { exit(EXIT_FAILURE); }
+
+    //Change Directory
+    //If we cant find the directory we exit with failure.
+    if ((chdir("/")) < 0) { exit(EXIT_FAILURE); }
+
+    //Close Standard File Descriptors
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+
+    //----------------
+    //Main Process
+    //----------------
+    while(true){
+        process();    //Run our Process
+        sleep(60);    //Sleep for 60 seconds
+    }
+
+    //Close the log
+    closelog ();
+}
+*/
