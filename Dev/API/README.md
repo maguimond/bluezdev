@@ -1,3 +1,5 @@
+FOR TESTS: Use gatttool.c
+
 ''Public Functions'':
 errorData Connect(server_mac_addr)
 errorData Connect(server_name)
