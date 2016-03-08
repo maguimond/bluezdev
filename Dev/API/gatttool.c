@@ -1,19 +1,7 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
-/*
-// Daemon Includes - Tests purposes
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <stdio.h>
-//#include <stdlib.h>
-#include <fcntl.h>
-//#include <errno.h>
-//#include <unistd.h>
-//#include <syslog.h>
-#include <string.h>
-#define DAEMON_NAME "vdaemon"
-*/
+
 #include <errno.h>
 #include <glib.h>
 #include <glib/gprintf.h>
@@ -31,6 +19,7 @@
 #include "gatt.h"
 #include "gatttool.h"
 
+#define FLAGS_AD_TYPE 				0x01
 #define FLAGS_LIMITED_MODE_BIT 		0x01
 #define FLAGS_GENERAL_MODE_BIT 		0x02
 #define EIR_NAME_SHORT              0x08 
@@ -63,7 +52,7 @@ static connect_cb userConCb;
 	
 // "Private Functions"
 
-//TODO
+//TODO on a tu besoin?
 //int getChecksum(char *data);
 
 void connectCallbackWrapper(GIOChannel *io, GError *err, gpointer user_data)
@@ -86,7 +75,7 @@ void connectCallbackWrapper(GIOChannel *io, GError *err, gpointer user_data)
 
 void writeCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpointer user_data)
 {
-	writeData *wdata = (listenSessionData *) user_data;
+	writeData *wdata = (writeData *) user_data;
 	GAttrib *attrib = wdata->attrib;
 		
 	g_print("API Write Callback wrapper\n");
@@ -107,13 +96,13 @@ void writeCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpoint
 
 void readCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpointer user_data)
 {
-	readData *rdata = (listenSessionData *) user_data;
+	readData *rdata = (readData *) user_data;
 	GAttrib *attrib = rdata->attrib;
 		
 	g_print("API Read Callback wrapper\n");
 		
 	uint8_t value[ATT_MAX_MTU];
-	int i, vlen;
+	int vlen;
 
 	if (status != 0) {
 		g_printerr("Characteristic value/descriptor read failed: %s\n",
@@ -130,14 +119,14 @@ void readCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpointe
 
 
 }
-
-
 // "Public Functions"
-//Return 0 if ok, else return primaryErrorCode
+
+
 int connect_by_addr(char *server_mac_addr, connect_cb cbFct)
 {
 	printf("API Connect By Address\n");
-	GIOChannel *chan;
+	//TODO: Lire sur GIOChannel
+	//GIOChannel *chan;
 	gchar *opt_src = NULL;
 	gchar *opt_dst = NULL;
 	gchar *opt_sec_level = NULL;
@@ -152,7 +141,8 @@ int connect_by_addr(char *server_mac_addr, connect_cb cbFct)
 	
 	userConCb = cbFct;
 	
-	chan = gatt_connect(opt_src, opt_dst, opt_sec_level, opt_psm, opt_mtu, connectCallbackWrapper);
+	//chan = gatt_connect(opt_src, opt_dst, opt_sec_level, opt_psm, opt_mtu, connectCallbackWrapper);
+	gatt_connect(opt_src, opt_dst, opt_sec_level, opt_psm, opt_mtu, connectCallbackWrapper);
 	
 	free(opt_src);
 	free(opt_dst);
@@ -161,7 +151,39 @@ int connect_by_addr(char *server_mac_addr, connect_cb cbFct)
 	return 0;
 }
 
-//A lot of functions to discover by name....
+//A lot of functions to discover by name.... TODO: Cleanup?
+static int read_flags(uint8_t *flags, const uint8_t *data, size_t size)
+{
+	size_t offset;
+
+	if (!flags || !data)
+		return -EINVAL;
+
+	offset = 0;
+	while (offset < size) {
+		uint8_t len = data[offset];
+		uint8_t type;
+
+		// Check if it is the end of the significant part 
+		if (len == 0)
+			break;
+
+		if (len + offset > size)
+			break;
+
+		type = data[offset + 1];
+
+		if (type == FLAGS_AD_TYPE) {
+			*flags = data[offset + 2];
+			return 0;
+		}
+
+		offset += 1 + len;
+	}
+
+	return -ENOENT;
+}
+
 static int check_report_filter(uint8_t procedure, le_advertising_info *info)
 {
 	uint8_t flags;
@@ -307,10 +329,12 @@ done:
 
 int connect_by_name(char *server_name, connect_cb cbFct)
 {
+	printf("API Connect by name");
 	gchar *opt_dst = NULL;
 	gchar *opt_dst_name = NULL;
 	int dev_id =-1;
-	int err, opt, dd;
+	int err =0;
+	int dd;
 	uint8_t own_type = 0x00;
 	uint8_t scan_type = 0x01;
 	uint8_t filter_type = 0;
@@ -333,9 +357,14 @@ int connect_by_name(char *server_name, connect_cb cbFct)
 	err = print_advertising_devices(dd, filter_type,opt_dst_name,opt_dst);
 	err = hci_le_set_scan_enable(dd, 0x00, filter_dup, 1000);
 	hci_close_dev(dd);
-
-	
-	connect_by_addr(opt_dst, cbFct);
+	if(err)
+	{
+		printf("Error\n");
+	}
+	else
+	{
+		connect_by_addr(opt_dst, cbFct);	
+	}
 	
 	free(opt_dst_name);
 	free(opt_dst);
@@ -344,7 +373,6 @@ int connect_by_name(char *server_name, connect_cb cbFct)
 }
 
 //Write automatically append the checksum (TODO: If needed?)
-//Return 0 if ok, else return primaryErrorCode
 int writeSingle(gpointer user_data, int hnd,char *data, write_cb cbFct)
 {
 	GAttrib *attrib = user_data;
@@ -367,8 +395,32 @@ int writeSingle(gpointer user_data, int hnd,char *data, write_cb cbFct)
 	return 0;
 }
 
-//TODO
-//int writeBatch(GIOChannel *io, int *hnd,char **data, cb_fct cbFct); //Return 0 if ok, else return primaryErrorCode
+//TODO et TOFIX - wath to do with errorCode?
+void writeBatchCbErrorCheck(gpointer user_data, guint8 errorCode)
+{
+	printf("API Write Batch Error Check\n");
+	if(errorCode == 0x43)
+	{
+		printf("hum...\n");
+	}
+}
+
+int writeBatch(gpointer user_data, int *hnd,char *data[],int dataCnt, write_cb cbFct)
+{
+	printf("API Write Batch\n");
+	int i=0;
+	while(i<(dataCnt-1))
+	{
+		writeSingle(user_data,hnd[i],data[i],writeBatchCbErrorCheck);
+		free(data[i]);
+		i++;
+	}
+	writeSingle(user_data,hnd[i],data[i],cbFct);
+	free(data[i]);
+	free(data);
+	free(hnd);
+	return 0;
+}
 
 int readSingle(gpointer user_data, int hnd,read_cb cbFct)
 {
@@ -385,10 +437,21 @@ int readSingle(gpointer user_data, int hnd,read_cb cbFct)
 }
 
 //TODO
-//char* readBatch(GIOChannel *io, int *hnd,char **data,read_cb cbFct);
-
-//TODO
-//void printErrors(FILE *fp); // Allow to redirect to sdtout or a file(eg: errorsLog)
+//TODO et TOFIX - wath to do with errorCode?
+/*
+void readBatchCbErrorCheck(gpointer user_data, guint8 errorCode)
+{
+	printf("API Read Batch Error Check\n");
+	if(errorCode == 0x44)
+	{
+		printf("hum hum...\n");
+	}
+}
+int readBatch(GIOChannel *io, int *hnd,char **data,read_batch_cb cbFct)
+{
+	
+}
+*/
 
 static void events_handler(const uint8_t *pdu, uint16_t len, gpointer user_data)
 {
@@ -485,16 +548,12 @@ static void listen_start(gpointer user_data, unsigned int timeout, listen_cb cbF
 	}
 }
 
-
-
-// SIMPLE EXAMPLE USER CODE - TOOL STYLE
-
+// SIMPLE EXAMPLE USER CODE / TEST CODE
 static GMainLoop *my_event_loop;
-static int testCnt = 0;
 
-void my_read_cb(gpointer user_data, uint8_t *value,int vlen, int errorCode)
+void my_read_cb(gpointer user_data, uint8_t *value,int vlen, guint8 errorCode)
 {
-	GAttrib *my_attrib = user_data;
+	//GAttrib *my_attrib = user_data;
 		
 	int i;
 	printf("User Read Callback\n");
@@ -513,7 +572,7 @@ void my_read_cb(gpointer user_data, uint8_t *value,int vlen, int errorCode)
 
 void my_stdout_listen_cb(gpointer user_data, int errorCode)
 {
-	GAttrib *my_attrib = user_data;
+	//GAttrib *my_attrib = user_data;
 		
 	printf("User Console Listen Callback\n");
 
@@ -527,118 +586,43 @@ void my_file_listen_cb(gpointer user_data, int errorCode)
 	readSingle(my_attrib,0x0010,my_read_cb);
 }
 
-void my_write_cb(gpointer user_data, int errorCode)
+void my_write_cb(gpointer user_data, guint8 errorCode)
 {
 	GAttrib *my_attrib = user_data;
 	
 	FILE* fp = fopen("/root/data_dump.log","w");
 	
 	printf("User Write Callback\n");
-	if(testCnt == 0)
-	{
-		writeSingle(my_attrib,0x000E,"A13C22",my_write_cb);
-		testCnt = 1;
-	}
-	else
-	{
-		listen_start(my_attrib, 5000,my_stdout_listen_cb,NULL); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
-		sleep(1);
-		listen_start(my_attrib, 10000,my_file_listen_cb,fp); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
-	}
+
+	listen_start(my_attrib, 5000,my_stdout_listen_cb,NULL); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
+	sleep(1);
+	listen_start(my_attrib, 10000,my_file_listen_cb,fp); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
+
 }
-void my_con_cb(gpointer user_data, int errorCode)
+void my_con_cb(gpointer user_data, GError *err)
 {
 	GAttrib *my_attrib = user_data;
 	
 	printf("User Connection Callback\n");
 	my_attrib = user_data;
-	writeSingle(my_attrib,0x0011,"0300",my_write_cb);
-}
-
-int main(int argc, char *argv[])
-{
-	printf("User Main , Compile @ 3:11pm\n");
 	
-	if(strcmp(argv[1],"-b") == 0)
-	{
-		connect_by_addr(argv[2], my_con_cb);		
-	}
-	else if(strcmp(argv[1],"-n") == 0)
-	{
-		connect_by_name(argv[2], my_con_cb);
-	}
+	//Static Params
+	//int hnd[2] = {0x0011, 0x000E};
+	//char *data[2] = {"0300","A13C22"};
 	
-	my_event_loop = g_main_loop_new(NULL, FALSE);
-	g_main_loop_run(my_event_loop);
-	g_main_loop_unref(my_event_loop);
-	exit(EXIT_SUCCESS);
-}
-
-
-
-
-
-
-// DEAD CODE
-/*
-// SIMPLE EXAMPLE USER CODE - DAEMON STYLE
-
-static GMainLoop *my_event_loop;
-static GAttrib *my_attrib;
-
-static int testCnt = 0;
-
-void my_read_cb(uint8_t *value,int vlen, int errorCode)
-{
-	int i;
-	printf("User Read Callback\n");
-	g_print("Read Data: ");
-	for (i = 0; i < vlen; i++)
-	{
-		g_print("%02x ", value[i]);
-	}
-	g_print("\n");
-			
-	printf("Sleeping for 5 seconds...\n");
-	sleep(5);
-	printf("See you soon!\n");
-	g_main_loop_quit(my_event_loop);
-}
-
-void my_listen_cb(int errorCode)
-{
-	printf("User Listen Callback\n");
-	fclose(my_fp);
-	my_fp = NULL;
-	readSingle(my_attrib,0x0010,my_read_cb);
-	//printf("Sleeping for 10 seconds...\n");
-	//sleep(10);
-	//printf("See you soon!\n");
-	//g_main_loop_quit(my_event_loop);
-}
-
-void my_write_cb(int errorCode)
-{
-
-	my_fp = fopen("/root/data_dump.log","w");
+	//Dynamic Params - TODO: Struct? ect...
+	int *hnd;
+	hnd = malloc(2*sizeof(int));
+	hnd[0] = 0x0011;
+	hnd[1] = 0x000E;
+	char **data;
+	data = malloc(2*sizeof(char *));
+	data[0] = malloc(5);
+	data[1] = malloc(7);
+	strcpy(data[0],"0300");
+	strcpy(data[1],"A13C22");
 	
-	printf("User Write Callback\n");
-	if(testCnt == 0)
-	{
-		writeSingle(my_attrib,0x000E,"A13C22",my_write_cb);
-		testCnt = 1;
-	}
-	else
-	{
-		//listen_start(my_attrib, 5000,my_listen_cb,stdout); // Can pass stdout or any other file ptr, if NULL API will use stdout, 0 as timeout=runs forever
-		listen_start(my_attrib, 5000,my_listen_cb,my_fp); // Can pass stdout or any other file ptr, if NULL API will use stdout, 0 as timeout=runs forever
-	}
-}
-void my_con_cb(gpointer user_data, int errorCode)
-{
-	printf("User Connection Callback\n");
-	my_attrib = user_data;
-	writeSingle(my_attrib,0x0011,"0300",my_write_cb);
+	writeBatch(my_attrib, hnd, data, 2, my_write_cb);
 }
 
 int main(int argc, char *argv[])
@@ -659,55 +643,3 @@ int main(int argc, char *argv[])
 	g_main_loop_unref(my_event_loop);
 	exit(EXIT_SUCCESS);
 }
-
-void process(){
-	//TODO: Look into input file to know if any write is waiting
-    //syslog (LOG_NOTICE, "Writing to my Syslog");
-}   
-
-int main(int argc, char *argv[]) {
-
-    //Set our Logging Mask and open the Log
-    setlogmask(LOG_UPTO(LOG_NOTICE));
-    openlog(DAEMON_NAME, LOG_CONS | LOG_NDELAY | LOG_PERROR | LOG_PID, LOG_USER);
-
-    syslog(LOG_INFO, "Entering Daemon");
-
-    pid_t pid, sid;
-
-   //Fork the Parent Process
-    pid = fork();
-
-    if (pid < 0) { exit(EXIT_FAILURE); }
-
-    //We got a good pid, Close the Parent Process
-    if (pid > 0) { exit(EXIT_SUCCESS); }
-
-    //Change File Mask
-    umask(0);
-
-    //Create a new Signature Id for our child
-    sid = setsid();
-    if (sid < 0) { exit(EXIT_FAILURE); }
-
-    //Change Directory
-    //If we cant find the directory we exit with failure.
-    if ((chdir("/")) < 0) { exit(EXIT_FAILURE); }
-
-    //Close Standard File Descriptors
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-
-    //----------------
-    //Main Process
-    //----------------
-    while(true){
-        process();    //Run our Process
-        sleep(60);    //Sleep for 60 seconds
-    }
-
-    //Close the log
-    closelog ();
-}
-*/
