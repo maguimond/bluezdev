@@ -4,7 +4,7 @@
 
 #include <errno.h>
 #include <glib.h>
-#include <glib/gprintf.h>
+#include <glib/gprintf.h> //Used only in UserCode Example...
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -17,7 +17,7 @@
 #include "btio.h"
 #include "gattrib.h"
 #include "gatt.h"
-#include "gatttool.h"
+#include "ble_api.h"
 
 #define FLAGS_AD_TYPE 				0x01
 #define FLAGS_LIMITED_MODE_BIT 		0x01
@@ -25,15 +25,22 @@
 #define EIR_NAME_SHORT              0x08 
 #define EIR_NAME_COMPLETE           0x09
 
+//TODO: Fix this so bad patch...
+#define EPROTOCOL					0x64
+
+//TODO: Make code thread-safe...
+
+
 typedef void (*connect_cb)(gpointer user_data, GError *err);
 typedef void (*write_cb)(gpointer user_data, guint8 errCode);
-typedef void (*listen_cb)(gpointer user_data, int errorCode);
+typedef void (*listen_handler)(const uint8_t *pdu, uint16_t len, gpointer user_data);
+typedef void (*listenEnd_cb)(gpointer user_data, int errorCode);
 typedef void (*read_cb)(gpointer user_data, uint8_t *value,int vlen, guint8 errCode);
 
 typedef struct listenSessionDataStruct{
-	FILE *userFilePtr;
 	GAttrib *attrib;
-	listen_cb userListenCb;
+	listen_handler userListenHandler;
+	listenEnd_cb userListenEndCb;
 	int notifyEvtId;
 	int indEvtId;
 }listenSessionData;
@@ -57,13 +64,13 @@ static connect_cb userConCb;
 
 void connectCallbackWrapper(GIOChannel *io, GError *err, gpointer user_data)
 {
-	printf("API Connection Callback Wrapper\n");
+	//printf("API Connection Callback Wrapper\n");
 	
 	GAttrib *attrib=NULL;
 
 	if (err) 
 	{
-		g_printerr("%s\n", err->message);
+		//g_printerr("%s\n", err->message);
 	}
 	else
 	{
@@ -78,16 +85,15 @@ void writeCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpoint
 	writeData *wdata = (writeData *) user_data;
 	GAttrib *attrib = wdata->attrib;
 		
-	g_print("API Write Callback wrapper\n");
+	//g_print("API Write Callback wrapper\n");
 	
 	if (status != 0) {
-		g_printerr("Characteristic Write Request failed: "
-						"%s\n", att_ecode2str(status));
+		//g_printerr("Characteristic Write Request failed: %s\n", att_ecode2str(status));
 	}
 	else if (!dec_write_resp(pdu, plen)) {
-		g_printerr("Protocol error\n");
+		//g_printerr("Protocol error\n");
 		//TODO: Fix this so bad patch...
-		status = 100;
+		status = EPROTOCOL;
 	}
 
 	free(user_data);
@@ -99,56 +105,24 @@ void readCallBackWrapper(guint8 status, const guint8 *pdu, guint16 plen, gpointe
 	readData *rdata = (readData *) user_data;
 	GAttrib *attrib = rdata->attrib;
 		
-	g_print("API Read Callback wrapper\n");
+	//g_print("API Read Callback wrapper\n");
 		
 	uint8_t value[ATT_MAX_MTU];
 	int vlen;
 
 	if (status != 0) {
-		g_printerr("Characteristic value/descriptor read failed: %s\n",
-							att_ecode2str(status));
+		//g_printerr("Characteristic value/descriptor read failed: %s\n", att_ecode2str(status));
 	}
 	if (!dec_read_resp(pdu, plen, value, &vlen)) {
-		g_printerr("Protocol error\n");
+		//g_printerr("Protocol error\n");
 		//TODO: Fix this so bad patch...
-		status = 100;
+		status = EPROTOCOL;
 	}
 	
-		free(user_data);
+	free(user_data);
 	rdata->userReadCb(attrib,value,vlen,status);
 
 
-}
-// "Public Functions"
-
-
-int connect_by_addr(char *server_mac_addr, connect_cb cbFct)
-{
-	printf("API Connect By Address\n");
-	//TODO: Lire sur GIOChannel
-	//GIOChannel *chan;
-	gchar *opt_src = NULL;
-	gchar *opt_dst = NULL;
-	gchar *opt_sec_level = NULL;
-	int opt_mtu = 0;
-	int opt_psm = 0;		
-			
-	opt_dst = (char *)malloc(18);
-	strcpy(opt_dst,server_mac_addr);
-	
-	opt_sec_level = (char *)malloc(4);
-	strcpy(opt_sec_level,"low");
-	
-	userConCb = cbFct;
-	
-	//chan = gatt_connect(opt_src, opt_dst, opt_sec_level, opt_psm, opt_mtu, connectCallbackWrapper);
-	gatt_connect(opt_src, opt_dst, opt_sec_level, opt_psm, opt_mtu, connectCallbackWrapper);
-	
-	free(opt_src);
-	free(opt_dst);
-	free(opt_sec_level);
-	
-	return 0;
 }
 
 //A lot of functions to discover by name.... TODO: Cleanup?
@@ -206,7 +180,8 @@ static int check_report_filter(uint8_t procedure, le_advertising_info *info)
 			return 1;
 		break;
 	default:
-		fprintf(stderr, "Unknown discovery procedure\n");
+		//fprintf(stderr, "Unknown discovery procedure\n");
+		break;
 	}
 
 	return 0;
@@ -245,7 +220,8 @@ static void eir_parse_name(uint8_t *eir, size_t eir_len,
 	}
 
 failed:
-	snprintf(buf, buf_len, "(unknown)");
+	return;
+	//snprintf(buf, buf_len, "(unknown)");
 }
 
 static int print_advertising_devices(int dd, uint8_t filter_type, gchar *opt_dst_name, gchar *opt_dst)
@@ -258,7 +234,7 @@ static int print_advertising_devices(int dd, uint8_t filter_type, gchar *opt_dst
 
 	olen = sizeof(of);
 	if (getsockopt(dd, SOL_HCI, HCI_FILTER, &of, &olen) < 0) {
-		printf("Could not get socket options\n");
+		//printf("Could not get socket options\n");
 		return -1;
 	}
 
@@ -267,7 +243,7 @@ static int print_advertising_devices(int dd, uint8_t filter_type, gchar *opt_dst
 	hci_filter_set_event(EVT_LE_META_EVENT, &nf);
 
 	if (setsockopt(dd, SOL_HCI, HCI_FILTER, &nf, sizeof(nf)) < 0) {
-		printf("Could not set socket options\n");
+		//printf("Could not set socket options\n");
 		return -1;
 	}
 
@@ -307,10 +283,10 @@ static int print_advertising_devices(int dd, uint8_t filter_type, gchar *opt_dst
 			eir_parse_name(info->data, info->length,
 							name, sizeof(name) - 1);
 
-			printf("%s %s\n", addr, name);
+			//printf("%s %s\n", addr, name);
 			if(strcmp(name,opt_dst_name)==0)
 			{
-				printf("Found %s! MAC Addr: %s\n", name, addr);
+				//printf("Found %s! MAC Addr: %s\n", name, addr);
 
 				strcpy(opt_dst,addr);
 				goto done;
@@ -327,9 +303,101 @@ done:
 	return 0;
 }
 
+//TODO et TOFIX - wath to do with errorCode?
+void writeBatchCbErrorCheck(gpointer user_data, guint8 errorCode)
+{
+	//printf("API Write Batch Error Check\n");
+}
+
+//TODO et TOFIX - wath to do with errorCode?
+/*
+void readBatchCbErrorCheck(gpointer user_data, guint8 errorCode)
+{
+	printf("API Read Batch Error Check\n");
+	if(errorCode == 0x44)
+	{
+		printf("hum hum...\n");
+	}
+}
+*/
+
+static void listen_events_handler(const uint8_t *pdu, uint16_t len, gpointer user_data)
+{
+	listenSessionData *data = (listenSessionData *)user_data;
+	GAttrib *attrib = data->attrib;
+		
+	//printf("API Listen Event Handler\n");
+	
+	uint8_t opdu[ATT_MAX_MTU];
+		uint16_t olen = 0;
+
+	if (pdu[0] == ATT_OP_HANDLE_IND)
+	{
+		olen = enc_confirmation(opdu, sizeof(opdu));
+
+		if (olen > 0)
+			g_attrib_send(attrib, 0, opdu[0], opdu, olen, NULL, NULL, NULL);		
+	}
+
+	data->userListenHandler(pdu,len,attrib);
+}
+
+static gboolean listen_stop(gpointer user_data)
+{	
+	//printf("API Listen stop\n");
+	listenSessionData *data = (listenSessionData *)user_data;
+	GAttrib *attrib = data->attrib;
+
+	g_attrib_unregister(attrib,data->notifyEvtId);
+	g_attrib_unregister(attrib,data->indEvtId);
+	
+	return FALSE;
+}
+
+static void listen_destroy(gpointer user_data)
+{
+	listenSessionData *data = (listenSessionData *) user_data;
+	GAttrib *attrib = data->attrib;
+		
+	//printf("API Listen destroy\n");
+	
+	free(user_data);
+	
+	data->userListenEndCb(attrib,0);
+}
+
+// "Public Functions"
+
+int connect_by_addr(char *server_mac_addr, connect_cb cbFct)
+{
+	//printf("API Connect By Address\n");
+	
+	gchar *opt_src = NULL;
+	gchar *opt_dst = NULL;
+	gchar *opt_sec_level = NULL;
+	int opt_mtu = 0;
+	int opt_psm = 0;		
+			
+	opt_dst = (char *)malloc(18);
+	strcpy(opt_dst,server_mac_addr);
+	
+	opt_sec_level = (char *)malloc(4);
+	strcpy(opt_sec_level,"low");
+	
+	userConCb = cbFct;
+	
+	gatt_connect(opt_src, opt_dst, opt_sec_level, opt_psm, opt_mtu, connectCallbackWrapper);
+	
+	free(opt_src);
+	free(opt_dst);
+	free(opt_sec_level);
+	
+	return 0;
+}
+
 int connect_by_name(char *server_name, connect_cb cbFct)
 {
-	printf("API Connect by name");
+	//printf("API Connect by name\n");
 	gchar *opt_dst = NULL;
 	gchar *opt_dst_name = NULL;
 	int dev_id =-1;
@@ -347,7 +415,7 @@ int connect_by_name(char *server_name, connect_cb cbFct)
 	opt_dst_name = (char *)malloc(strlen(server_name)+1);
 	strcpy(opt_dst_name,server_name);
 	
-	printf("Searching for device named: %s\n",opt_dst_name);
+	//printf("Searching for device named: %s\n",opt_dst_name);
 
 	dev_id = hci_get_route(NULL);
 
@@ -372,12 +440,12 @@ int connect_by_name(char *server_name, connect_cb cbFct)
 	return 0;
 }
 
-//Write automatically append the checksum (TODO: If needed?)
+//TODO: Write automatically append the checksum (TODO: If needed?)
 int writeSingle(gpointer user_data, int hnd,char *data, write_cb cbFct)
 {
 	GAttrib *attrib = user_data;
 		
-	printf("API Write Single\n");
+	//printf("API Write Single\n");
 		
 	//Set user callback function
 	writeData *wdata = malloc(sizeof *wdata);
@@ -389,25 +457,15 @@ int writeSingle(gpointer user_data, int hnd,char *data, write_cb cbFct)
 	size_t len;
 	len = gatt_attr_data_from_string(data, &value);
 	
-	//Write --> ... --> writeCallBackWrapper
+	
 	gatt_write_char(attrib, hnd, value, len, writeCallBackWrapper, wdata);
 	
 	return 0;
 }
 
-//TODO et TOFIX - wath to do with errorCode?
-void writeBatchCbErrorCheck(gpointer user_data, guint8 errorCode)
-{
-	printf("API Write Batch Error Check\n");
-	if(errorCode == 0x43)
-	{
-		printf("hum...\n");
-	}
-}
-
 int writeBatch(gpointer user_data, int *hnd,char *data[],int dataCnt, write_cb cbFct)
 {
-	printf("API Write Batch\n");
+	//printf("API Write Batch\n");
 	int i=0;
 	while(i<(dataCnt-1))
 	{
@@ -425,7 +483,7 @@ int writeBatch(gpointer user_data, int *hnd,char *data[],int dataCnt, write_cb c
 int readSingle(gpointer user_data, int hnd,read_cb cbFct)
 {
 	GAttrib *attrib = user_data;
-	printf("API Read Single\n");
+	//printf("API Read Single\n");
 
 	readData *rdata = malloc(sizeof *rdata);
 	rdata->userReadCb = cbFct;
@@ -437,116 +495,33 @@ int readSingle(gpointer user_data, int hnd,read_cb cbFct)
 }
 
 //TODO
-//TODO et TOFIX - wath to do with errorCode?
 /*
-void readBatchCbErrorCheck(gpointer user_data, guint8 errorCode)
-{
-	printf("API Read Batch Error Check\n");
-	if(errorCode == 0x44)
-	{
-		printf("hum hum...\n");
-	}
-}
 int readBatch(GIOChannel *io, int *hnd,char **data,read_batch_cb cbFct)
 {
 	
 }
 */
 
-static void events_handler(const uint8_t *pdu, uint16_t len, gpointer user_data)
-{
-	listenSessionData *data = (listenSessionData *)user_data;
-	GAttrib *attrib = data->attrib;
-	FILE *fp;
-	if(data->userFilePtr != NULL)
-	{
-		fp = data->userFilePtr;
-	}
-	else
-	{
-		fp = stdout;
-	}
-		
-	printf("API Listen Event Handler\n");
-	uint8_t opdu[ATT_MAX_MTU];
-	uint16_t handle, i, olen = 0;
-
-	handle = att_get_u16(&pdu[1]);
-
-	switch (pdu[0]) {
-	case ATT_OP_HANDLE_NOTIFY:
-		g_fprintf(fp,"Notification handle = 0x%04x value: ", handle);
-		break;
-	case ATT_OP_HANDLE_IND:
-		g_fprintf(fp,"Indication   handle = 0x%04x value: ", handle);
-		break;
-	default:
-		g_fprintf(fp,"Invalid opcode\n");
-		return;
-	}
-
-	for (i = 3; i < len; i++)
-		g_fprintf(fp,"%02x ", pdu[i]);
-
-	g_fprintf(fp,"\n");
-
-	if (pdu[0] == ATT_OP_HANDLE_NOTIFY)
-		return;
-
-	olen = enc_confirmation(opdu, sizeof(opdu));
-
-	if (olen > 0)
-		g_attrib_send(attrib, 0, opdu[0], opdu, olen, NULL, NULL, NULL);
-}
-
-static gboolean listen_stop(gpointer user_data)
-{	
-	printf("API Listen stop\n");
-	listenSessionData *data = (listenSessionData *)user_data;
-	GAttrib *attrib = data->attrib;
-
-	g_attrib_unregister(attrib,data->notifyEvtId);
-	g_attrib_unregister(attrib,data->indEvtId);
-	
-	return FALSE;
-}
-
-static void listen_destroy(gpointer user_data)
-{
-	listenSessionData *data = (listenSessionData *) user_data;
-	GAttrib *attrib = data->attrib;
-		
-	printf("API Listen destroy\n");
-	
-	if(data->userFilePtr != NULL)
-	{
-		fclose(data->userFilePtr);
-	}
-	
-	free(user_data);
-	
-	data->userListenCb(attrib,0);
-}
-
-static void listen_start(gpointer user_data, unsigned int timeout, listen_cb cbFct, FILE *fp)
+static void listen_start(gpointer user_data, unsigned int timeout, listenEnd_cb cbFct, listen_handler hndFct)
 {
 	GAttrib *attrib = user_data;
 	
 	listenSessionData *data = malloc(sizeof *data);
 	data->attrib = user_data;
-	data->userListenCb = cbFct;
-	data->userFilePtr = fp;
+	data->userListenHandler = hndFct;
+	data->userListenEndCb = cbFct;
 		
-	printf("API Listen start\n");
+	//printf("API Listen start\n");
 	
-	data->notifyEvtId = g_attrib_register(attrib, ATT_OP_HANDLE_NOTIFY, events_handler, data, NULL);
-	data->indEvtId = g_attrib_register(attrib, ATT_OP_HANDLE_IND, events_handler, data, NULL);
+	data->notifyEvtId = g_attrib_register(attrib, ATT_OP_HANDLE_NOTIFY, listen_events_handler, data, NULL);
+	data->indEvtId = g_attrib_register(attrib, ATT_OP_HANDLE_IND, listen_events_handler, data, NULL);
 							
 	if(timeout)
 	{
 		g_timeout_add_full (G_PRIORITY_DEFAULT,timeout, listen_stop, data, listen_destroy);
 	}
 }
+
 
 // SIMPLE EXAMPLE USER CODE / TEST CODE
 static GMainLoop *my_event_loop;
@@ -570,6 +545,45 @@ void my_read_cb(gpointer user_data, uint8_t *value,int vlen, guint8 errorCode)
 	g_main_loop_quit(my_event_loop);
 }
 
+void my_listen_handler(const uint8_t *pdu, uint16_t len, gpointer user_data)
+{
+	//GAttrib *my_attrib = user_data;
+	
+		//FILE *fp;
+	//if(data->userFilePtr != NULL)
+	//{
+	//	fp = data->userFilePtr;
+	//}
+	//else
+	//{
+	//	fp = stdout;
+	//}
+		
+	printf("User Listen Handler\n");
+	
+	uint16_t handle, i;
+
+	handle = att_get_u16(&pdu[1]);
+
+	switch (pdu[0]) {
+	case ATT_OP_HANDLE_NOTIFY:
+		g_printf("Notification handle = 0x%04x value: ", handle);
+		break;
+	case ATT_OP_HANDLE_IND:
+		g_printf("Indication   handle = 0x%04x value: ", handle);
+		break;
+	default:
+		g_printf("Invalid opcode\n");
+		return;
+	}
+
+	for (i = 3; i < len; i++)
+		g_printf("%02x ", pdu[i]);
+
+	g_printf("\n");
+
+}
+
 void my_stdout_listen_cb(gpointer user_data, int errorCode)
 {
 	//GAttrib *my_attrib = user_data;
@@ -580,6 +594,11 @@ void my_stdout_listen_cb(gpointer user_data, int errorCode)
 void my_file_listen_cb(gpointer user_data, int errorCode)
 {
 	GAttrib *my_attrib = user_data;
+	
+		//if(data->userFilePtr != NULL)
+	//{
+	//	fclose(data->userFilePtr);
+	//}
 		
 	printf("User File Listen Callback\n");
 
@@ -590,13 +609,13 @@ void my_write_cb(gpointer user_data, guint8 errorCode)
 {
 	GAttrib *my_attrib = user_data;
 	
-	FILE* fp = fopen("/root/data_dump.log","w");
+	//FILE* fp = fopen("/root/data_dump.log","w");
 	
 	printf("User Write Callback\n");
 
-	listen_start(my_attrib, 5000,my_stdout_listen_cb,NULL); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
+	listen_start(my_attrib, 5000,my_stdout_listen_cb,my_listen_handler);//,NULL); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
 	sleep(1);
-	listen_start(my_attrib, 10000,my_file_listen_cb,fp); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
+	listen_start(my_attrib, 10000,my_file_listen_cb,my_listen_handler);//,fp); // Can pass file ptr, if NULL API will use stdout, 0 as timeout=runs forever
 
 }
 void my_con_cb(gpointer user_data, GError *err)
@@ -628,6 +647,7 @@ void my_con_cb(gpointer user_data, GError *err)
 int main(int argc, char *argv[])
 {
 	printf("User Main\n");
+	printf("4:24pm\n");
 	
 	if(strcmp(argv[1],"-b") == 0)
 	{
