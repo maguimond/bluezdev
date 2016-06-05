@@ -1,15 +1,12 @@
-#!/bin/bash
+EA:6A:97:5D:C3:F0#!/bin/bash
 
 # Initialise le device bluetooth
-echo "Remise à zéro du device"
-if [ $(hciconfig hci0 reset) ]; then
-	exit 1;
-fi
+#echo "Remise à zéro du device"
+#if [ $(hciconfig hci0 reset) ]; then
+#	exit 1;
+#fi
 
-# Get address from bluecomm app
-echo "Scan des devies bluetooth"
-#BLE_ADDR=$(hcitool lescan | grep BlueTemp | awk '{print $1}')
-BLE_ADDR='C5:2A:45:36:E3:A2'
+BLE_ADDR=$1
 
 # GET_SENSOR_DATA test:
 # <SENSOR_DATA><GET><CHECKSUM>

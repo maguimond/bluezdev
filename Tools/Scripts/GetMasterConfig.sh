@@ -3,7 +3,7 @@
 # Get address from bluecomm app
 #echo "Scan des devies bluetooth"
 #BLE_ADDR=$(hcitool lescan | grep BlueTemp | awk '{print $1}')
-BLE_ADDR='C5:2A:45:36:E3:A2'
+BLE_ADDR=$1
 
 # GET_CONFIG test:
 # <CONFIG><GET><CHECKSUM>
