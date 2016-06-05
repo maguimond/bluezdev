@@ -31,6 +31,8 @@
 //TODO: Make code thread-safe...
 
 
+char gBLEPacket[20];
+
 typedef void (*connect_cb)(gpointer user_data, GError *err);
 typedef void (*write_cb)(gpointer user_data, guint8 errCode);
 typedef void (*listen_handler)(const uint8_t *pdu, uint16_t len, gpointer user_data);
@@ -639,16 +641,15 @@ void my_con_cb(gpointer user_data, GError *err)
 	data[0] = malloc(5);
 	data[1] = malloc(7);
 	strcpy(data[0],"0300");
-	strcpy(data[1],"A13C22");
+    strcpy(data[1], gBLEPacket);
 	
 	writeBatch(my_attrib, hnd, data, 2, my_write_cb);
 }
 
 int main(int argc, char *argv[])
 {
-	printf("User Main\n");
-	printf("4:24pm\n");
-	
+    strcpy(gBLEPacket, argv[3]);
+
 	if(strcmp(argv[1],"-b") == 0)
 	{
 		connect_by_addr(argv[2], my_con_cb);		
