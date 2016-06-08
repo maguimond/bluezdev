@@ -24,7 +24,7 @@ set (SHARED_DIR ${REPOS_ROOT}/Commun)
 include (${REPOS_ROOT}/Commun/CMake/CompilerOptions.cmake)
 
 # Remove -std=c99, cannot support some functions where storage size of ‘sa’ isn’t known & ‘SA_NOCLDSTOP’ undeclared.
-STRING(REGEX REPLACE "-std=c99" "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
+string (REGEX REPLACE "-std=c99" "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
 
 # Source file paths relative to source directory.
 set ( BBCONTROLLER_SOURCE_FILES
@@ -41,8 +41,11 @@ add_executable ( ${BINARY_NAME}
 find_library (LIB_BLUETOOTH bluetooth)
 find_library (LIB_GLIB glib-2.0)
 
-include_directories ( /usr/include/glib-2.0
-                      /usr/lib/i386-linux-gnu/glib-2.0/include )
+# Find include directories for glib and add them directly to compiler flags.
+execute_process ( COMMAND pkg-config --cflags-only-I glib-2.0
+                  OUTPUT_VARIABLE GLIB_INCLUDES
+                  OUTPUT_STRIP_TRAILING_WHITESPACE )
+set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${GLIB_INCLUDES}")
 
 target_link_libraries ( ${BINARY_NAME}
                         ${LIB_BLUETOOTH}
