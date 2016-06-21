@@ -21,7 +21,7 @@ set (BINARY_NAME "bluezapi-${VersionMaj}.${VersionMin}")
 set (REPOS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set (SHARED_DIR ${REPOS_ROOT}/Commun)
 # Include compiler options.
-include (${REPOS_ROOT}/Commun/CMake/CompilerOptions.cmake)
+include (${REPOS_ROOT}/Commun/CMake/CMakeOptions.cmake)
 
 # Remove -std=c99, cannot support some functions where storage size of ‘sa’ isn’t known & ‘SA_NOCLDSTOP’ undeclared.
 string (REGEX REPLACE "-std=c99" "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
